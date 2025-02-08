@@ -1,0 +1,136 @@
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+    tag: "{{.Name}}"
+
+services:
+  task1:
+    build:
+      context: ./1
+      dockerfile: Dockerfile
+    restart: on-failure:2
+    container_name: ecomet-task1
+    environment:
+      DATABASE_URL: "postgres://postgres:postgres@postgres:5432/postgres"
+    networks:
+      - ecomet-network
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      logging: "promtail"
+      logging_jobname: "containerlogs"
+    logging: *default-logging
+
+  task2:
+    build:
+      context: ./2
+      dockerfile: Dockerfile
+    restart: on-failure:1
+    container_name: ecomet-task2
+    environment:
+      GITHUB_AT: ${GITHUB_AT}
+    networks:
+      - ecomet-network
+    labels:
+      logging: "promtail"
+      logging_jobname: "containerlogs"
+    logging: *default-logging
+
+  task3:
+    build:
+      context: ./3
+      dockerfile: Dockerfile
+      additional_contexts:
+        scrapper: ./2
+    restart: on-failure:1
+    container_name: ecomet-task3
+    environment:
+      GITHUB_AT: ${GITHUB_AT}
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_USER: "default"
+      CLICKHOUSE_PASSWORD: "secret"
+      CLICKHOUSE_DATABASE: "test"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - ecomet-network
+    labels:
+      logging: "promtail"
+      logging_jobname: "containerlogs"
+    logging: *default-logging
+
+  postgres:
+    image: postgres:17
+    container_name: ecomet-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready", "-d", "postgres"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: on-failure:2
+    networks:
+      - ecomet-network
+    ports:
+      - "15432:5432"
+    labels:
+      logging: "promtail"
+      logging_jobname: "containerlogs"
+    logging: *default-logging
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: ecomet-clickhouse
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    restart: on-failure:2
+    networks:
+      - ecomet-network
+    ports:
+      - "8123:8123"  # HTTP-интерфейс
+      - "9000:9000"  # TCP-интерфейс
+    environment:
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=secret  # Установите пароль для пользователя default
+      - CLICKHOUSE_DB=database   # Автосоздание БД
+    labels:
+      logging: "promtail"
+      logging_jobname: "containerlogs"
+    logging: *default-logging
+
+  clickhouse-ui:
+    image: ghcr.io/caioricciuti/ch-ui:latest
+    container_name: ecomet-clickhouse-ui
+    restart: on-failure:2
+    networks:
+      - ecomet-network
+    ports:
+      - "5521:5521"
+    environment:
+      VITE_CLICKHOUSE_URL: "http://localhost:8123"
+      VITE_CLICKHOUSE_USER: "default"
+      VITE_CLICKHOUSE_PASS: "secret"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    labels:
+      logging: "promtail"
+      logging_jobname: "containerlogs"
+    logging: *default-logging
+
+networks:
+  ecomet-network:
+    name: ecomet-network
